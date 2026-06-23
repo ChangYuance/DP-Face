@@ -6,32 +6,26 @@ from einops import rearrange
 import numpy as np
 from typing import List, Tuple, Optional, Union, Dict, Any
 from pathlib import Path
-# 我的函数
 class CenterLoss(nn.Module):
     def __init__(self, num_classes, feat_dim, device, lambda_center=0.5):
         super(CenterLoss, self).__init__()
         self.num_classes = num_classes
         self.feat_dim = feat_dim
-        self.centers = nn.Parameter(torch.randn(num_classes, feat_dim).to(device))  # 随机初始化类别中心
+        self.centers = nn.Parameter(torch.randn(num_classes, feat_dim).to(device))
         self.device = device
         self.lambda_center = lambda_center
 
     def forward(self, features, labels):
-        """
-        features: [batch_size, feat_dim]
-        labels: [batch_size]
-        """
-        # 获取每个样本对应的类别中心
-        centers_batch = self.centers[labels]  # 根据标签获取中心
-        # 计算特征和中心之间的欧几里得距离
-        center_loss = torch.mean(torch.sum((features - centers_batch) ** 2, dim=1))/self.feat_dim  # 平均L2距离
+        centers_batch = self.centers[labels]
+        center_loss = torch.mean(torch.sum((features - centers_batch) ** 2, dim=1)) / self.feat_dim
         return center_loss
+
 def compute_l2_loss(model, weight_decay):
     l2_loss = 0
     for param in model.parameters():
-        if param.requires_grad:  # 只计算有梯度的参数
-            l2_loss += torch.sum(param ** 2)  # 计算每个参数的L2范数的平方
-    return weight_decay * l2_loss  # 将 weight_decay 乘上L2损失
+        if param.requires_grad:
+            l2_loss += torch.sum(param ** 2)
+    return weight_decay * l2_loss
 
 class EMA():
     def __init__(self, model, decay):
@@ -73,13 +67,10 @@ class FocalLoss(nn.Module):
         self.num_classes = num_classes
 
     def forward(self, inputs, targets):
-        # 对输入进行softmax
         inputs = F.softmax(inputs, dim=1)
-        # 选择正确类别的预测值
         targets = F.one_hot(targets, self.num_classes)
         p_t = torch.sum(inputs * targets, dim=1)
-        # 计算focal loss
-        loss = -self.alpha * (1 - p_t)**self.gamma * torch.log(p_t + 1e-8)  # 加上一个小常数避免log(0)
+        loss = -self.alpha * (1 - p_t) ** self.gamma * torch.log(p_t + 1e-8)
         return loss.mean()
 
 def get_wrong_path_with_confidence(
@@ -91,52 +82,35 @@ def get_wrong_path_with_confidence(
     use_softmax: bool = True,
     class_names: Optional[List[str]] = None,
     ) -> Tuple[List[str], List[str]]:
-    """
-    返回两类错误中「最可疑」（模型最自信但预测错）的 top_k 路径（按两层路径去重后排序）。
-    返回：
-        - wrong_0_to_1_paths: 真实为0但预测为1，且模型对"1"非常确信（即 P(1|input) 高）→ 可能是标签错标为0
-        - wrong_1_to_0_paths: 真实为1但预测为0，且模型对"0"非常确信 → 可能是标签错标为1
-    注意：
-    - 若 use_softmax=True，则先 softmax 归一化；否则直接用 logits（需确保 logits 合理，如未归一化时差值仍有意义）
-    - 错误置信度定义为：错误类别的概率（或 logits）减去真实类别的概率（或 logits）——越大越可疑
-    - 返回的是 sorted(unique two-level paths)，非原始错误样本顺序
-    """
     assert len(all_pred) == len(all_target) == len(allpath) == len(all_output), \
         "Length mismatch in inputs"
-    # Convert to tensor if not already
-    all_pred = np.array(all_pred)           # ← 必须！
-    all_target = np.array(all_target)       # ← 必须！
+
+    all_pred = np.array(all_pred)
+    all_target = np.array(all_target)
     allpath = np.array(allpath)
     all_pred = torch.from_numpy(all_pred)
     all_target = torch.from_numpy(all_target)
-    # Get softmax probs (if requested)
+
     if use_softmax:
         probs = torch.nn.functional.softmax(all_output, dim=1)
     else:
-        probs = all_output  # use raw logits (riskier but sometimes more discriminative)
-    # Build masks
-    # ✅ STEP 1: Get boolean masks (same as before)
-    mask_0_to_1 = (all_target == 0) & (all_pred == 1)  # shape: (N,)
-    mask_1_to_0 = (all_target == 1) & (all_pred == 0)  # shape: (N,)
+        probs = all_output
 
-    # ✅ STEP 2: Compute raw confidence deltas — NO torch.where, NO -inf
-    # We'll filter later → cleaner & safer
-    conf_0_to_1_full = probs[:, 1] - probs[:, 0]  # shape: (N,), for all samples
-    conf_1_to_0_full = probs[:, 0] - probs[:, 1]  # shape: (N,)
+    mask_0_to_1 = (all_target == 0) & (all_pred == 1)
+    mask_1_to_0 = (all_target == 1) & (all_pred == 0)
 
-    # ✅ STEP 3: Extract ONLY the confidence scores of WRONG samples
-    # This gives us two *short* arrays: one per error type
-    conf_0_to_1_masked = conf_0_to_1_full[mask_0_to_1]  # shape: (M0,), e.g., M0=115
-    conf_1_to_0_masked = conf_1_to_0_full[mask_1_to_0]  # shape: (M1,)
+    conf_0_to_1_full = probs[:, 1] - probs[:, 0]
+    conf_1_to_0_full = probs[:, 0] - probs[:, 1]
 
-    # ✅ STEP 4: Get top-k INDICES *within each masked subset* (local indices: 0 to M0-1)
+    conf_0_to_1_masked = conf_0_to_1_full[mask_0_to_1]
+    conf_1_to_0_masked = conf_1_to_0_full[mask_1_to_0]
+
     if len(conf_0_to_1_masked) > 0:
         _, topk_local_0_to_1 = torch.topk(
             conf_0_to_1_masked,
             k=min(top_k, len(conf_0_to_1_masked)),
             largest=True
         )
-        # topk_local_0_to_1 是 [0, M0) 范围内的索引，安全用于 allpath[mask_0_to_1]
         paths_0_to_1 = allpath[mask_0_to_1][topk_local_0_to_1].tolist()
     else:
         paths_0_to_1 = []
@@ -151,14 +125,13 @@ def get_wrong_path_with_confidence(
     else:
         paths_1_to_0 = []
 
-    # Optional: log top examples for debugging
     if class_names and len(paths_0_to_1) > 0:
-        print(f"\n🔍 Top {len(paths_0_to_1)} suspicious 0→1 errors (model confident in '{class_names[1]}'):")
+        print(f"\nTop {len(paths_0_to_1)} suspicious 0->1 errors (model confident in '{class_names[1]}'):")
         for i, p in enumerate(paths_0_to_1[:3]):
             idx = np.where((all_target == 0) & (all_pred == 1) & (allpath == p))[0][0]
             conf_val = conf_0_to_1_full[idx].item()
             print(f"  [{i+1}] {p} | conf={conf_val:.4f}")
-    # ✅ Apply your original get_unique_two_levels logic
+
     def get_unique_two_levels(paths: list) -> list:
         two_levels = set()
         for p in paths:
@@ -166,9 +139,9 @@ def get_wrong_path_with_confidence(
             if len(parts) >= 2:
                 two_levels.add("/".join(parts[:2]))
             elif len(parts) == 1:
-                two_levels.add(parts[0])  # fallback: 单级就用它自己
-            # else: empty path, skip
+                two_levels.add(parts[0])
         return sorted(two_levels)
+
     return get_unique_two_levels(paths_0_to_1), get_unique_two_levels(paths_1_to_0)
 
 

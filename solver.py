@@ -30,6 +30,8 @@ class Solver(object):
         self.best_ua = 0
         self.best_test_wa = 0
         self.best_test_ua = 0
+        self.patience = getattr(args, 'patience', 0)
+        self.early_stop_counter = 0
         if not os.path.exists(self.args.output_path):
             os.makedirs(self.args.output_path)
         # init cuda
@@ -99,7 +101,7 @@ class Solver(object):
                 train_acc, train_loss, train_center_loss = self.train_AUs(epoch)
             else:
                 train_acc, train_loss, train_center_loss = self.train(epoch)
-            lr = self.optimizer.param_groups[0]['lr']  # 获取当前的学习率
+            lr = self.optimizer.param_groups[0]['lr']
 
             # validate the model
             mode = "val" if self.args.val else "test"
@@ -114,6 +116,15 @@ class Solver(object):
             is_best = val_acc[1] > self.best_ua
             self.best_wa = max(val_acc[0], self.best_wa)
             self.best_ua = max(val_acc[1], self.best_ua)
+
+            # Early stopping on UA
+            if is_best:
+                self.early_stop_counter = 0
+            else:
+                self.early_stop_counter += 1
+                if self.patience > 0 and self.early_stop_counter >= self.patience:
+                    print(f"Early stopping triggered at epoch {epoch} (no UA improvement for {self.patience} epochs)")
+                    break
             is_test_best = False
             if is_best and self.args.val:
                 if self.args.AUs or self.args.audio:
@@ -260,8 +271,6 @@ class Solver(object):
                 center_loss = self.model.center_loss(feature, target)
             else:
                 output = self.model(images, AUs)
-            # AUs.shape torch.Size([8, 16, 20])
-            # images.shape torch.Size([8, 16, 3, 224, 224])
             loss = self.criterion(output, target)
             pred = torch.argmax(output, 1).cpu().detach().numpy()
             target = target.cpu().numpy()
@@ -315,18 +324,18 @@ class Solver(object):
             all_output.append(output.cpu())
             allpath.extend(pathname)
         all_output = torch.cat(all_output, dim=0).cpu()
-        probs = F.softmax(all_output, dim=1)[:, 1].numpy()  # 正类（class 1）概率
+        probs = F.softmax(all_output, dim=1)[:, 1].numpy()
         auc = roc_auc_score(all_target, probs)
-        acc1 = accuracy_score(all_target, all_pred)         # WAR
-        acc2 = balanced_accuracy_score(all_target, all_pred)         # UAR
+        acc1 = accuracy_score(all_target, all_pred)
+        acc2 = balanced_accuracy_score(all_target, all_pred)
         c_m = confusion_matrix(all_target, all_pred)
         loss = all_loss / len(dataloader)
         center_loss = all_center_loss / len(dataloader)
         wrong_0_to_1_paths, wrong_1_to_0_paths = get_wrong_path_with_confidence(
             all_pred, all_target, allpath, all_output,
-            top_k=50,  # 可调：返回前50个最可疑的路径
-            use_softmax=True,  # True: 用 softmax 概率；False: 用 logits（注意：logits 差值可能更鲁棒）
-            class_names=None  # 可选：用于日志打印（如 ['normal', 'abnormal']）
+            top_k=50,
+            use_softmax=True,
+            class_names=None
         )
         return [acc1, acc2, c_m], loss, center_loss, auc, wrong_0_to_1_paths, wrong_1_to_0_paths
     def validate(self, epoch, mode="val"):
@@ -365,20 +374,19 @@ class Solver(object):
             all_output.append(output.cpu())
             allpath.extend(pathname)
         all_output = torch.cat(all_output, dim=0).cpu()
-        probs = F.softmax(all_output, dim=1)[:, 1].numpy()  # 正类（class 1）概率
+        probs = F.softmax(all_output, dim=1)[:, 1].numpy()
         auc = roc_auc_score(all_target, probs)
-        acc1 = accuracy_score(all_target, all_pred)         # WAR
-        acc2 = balanced_accuracy_score(all_target, all_pred)         # UAR
+        acc1 = accuracy_score(all_target, all_pred)
+        acc2 = balanced_accuracy_score(all_target, all_pred)
         c_m = confusion_matrix(all_target, all_pred)
         loss = all_loss / len(dataloader)
         center_loss = all_center_loss / len(dataloader)
         wrong_0_to_1_paths, wrong_1_to_0_paths = get_wrong_path_with_confidence(
             all_pred, all_target, allpath, all_output,
-            top_k=50,  # 可调：返回前50个最可疑的路径
-            use_softmax=True,  # True: 用 softmax 概率；False: 用 logits（注意：logits 差值可能更鲁棒）
-            class_names=None  # 可选：用于日志打印（如 ['normal', 'abnormal']）
+            top_k=50,
+            use_softmax=True,
+            class_names=None
         )
-        # self.ema.restore()
         return [acc1, acc2, c_m], loss, center_loss, auc, wrong_0_to_1_paths, wrong_1_to_0_paths
     def save(self, state, is_best):
         # save the best model
@@ -411,15 +419,14 @@ class Solver(object):
         return msg
     def get_confusion_msg(self, confusion_matrix, val=True,
                         wrong_0_to_1_paths=None, wrong_1_to_0_paths=None):
-        # 初始化空列表，避免 None 引发错误
         wrong_0_to_1_paths = wrong_0_to_1_paths or []
         wrong_1_to_0_paths = wrong_1_to_0_paths or []
-        # 构建混淆矩阵文本
+
         if val:
             msg = "Test Confusion Matrix:\n"
         else:
             msg = "Validation Confusion Matrix:\n"
-        # 打印混淆矩阵表格（原逻辑）
+
         for i in range(len(confusion_matrix)):
             msg += self.emotions[i]
             for cell in confusion_matrix[i]:
@@ -428,12 +435,12 @@ class Solver(object):
         for emotion in self.emotions:
             msg += "\t" + emotion
         msg += "\n\n"
-        # 计算指标（原逻辑）
-        TN = confusion_matrix[0, 0]  # True Negatives (Normal → Normal)
-        FP = confusion_matrix[0, 1]  # False Positives (Normal → Palsy)
-        FN = confusion_matrix[1, 0]  # False Negatives (Palsy → Normal)
-        TP = confusion_matrix[1, 1]  # True Positives (Palsy → Palsy)
-        accuracy = (TP + TN) / (TP + TN + FP + FN + 1e-8)  # 防除零
+
+        TN = confusion_matrix[0, 0]
+        FP = confusion_matrix[0, 1]
+        FN = confusion_matrix[1, 0]
+        TP = confusion_matrix[1, 1]
+        accuracy = (TP + TN) / (TP + TN + FP + FN + 1e-8)
         sensitivity = TP / (TP + FN + 1e-8)
         specificity = TN / (TN + FP + 1e-8)
         print(f"Accuracy: {accuracy:.4f}")
@@ -445,7 +452,6 @@ class Solver(object):
         return msg
     def get_confusion_msg_easy(self, confusion_matrix, val=True, auc=0,
                             wrong_0_to_1_paths=None, wrong_1_to_0_paths=None):
-        # 初始化空列表，避免 None 引发错误
         wrong_0_to_1_paths = wrong_0_to_1_paths or []
         wrong_1_to_0_paths = wrong_1_to_0_paths or []
 
@@ -453,7 +459,7 @@ class Solver(object):
             msg = "Test Confusion Matrix:\n"
         else:
             msg = "Validation Confusion Matrix:\n"
-        # 打印混淆矩阵表格
+
         for i in range(len(confusion_matrix)):
             msg += self.emotions[i]
             for cell in confusion_matrix[i]:
@@ -462,31 +468,26 @@ class Solver(object):
         for emotion in self.emotions:
             msg += "\t" + emotion
         msg += "\n\n"
-        # 提取二分类混淆矩阵元素（假设 0=正常, 1=面瘫）
-        TN = confusion_matrix[0, 0]  # True Negative
-        FP = confusion_matrix[0, 1]  # False Positive
-        FN = confusion_matrix[1, 0]  # False Negative
-        TP = confusion_matrix[1, 1]  # True Positive
-        # 防除零
+
+        TN = confusion_matrix[0, 0]
+        FP = confusion_matrix[0, 1]
+        FN = confusion_matrix[1, 0]
+        TP = confusion_matrix[1, 1]
         eps = 1e-8
         accuracy = (TP + TN) / (TP + TN + FP + FN + eps)
-        sensitivity = TP / (TP + FN + eps)          # Recall
+        sensitivity = TP / (TP + FN + eps)
         specificity = TN / (TN + FP + eps)
-        precision = TP / (TP + FP + eps)            # 新增
-        # f1 = 2 * (precision * sensitivity) / (precision + sensitivity + eps)  # 新增
-        # 打印并记录
+        precision = TP / (TP + FP + eps)
         print(f"Accuracy: {accuracy:.4f}")
         print(f"Sensitivity (Recall): {sensitivity:.4f}")
         print(f"Specificity: {specificity:.4f}")
         print(f"Precision: {precision:.4f}")
         print(f"AUC: {auc:.4f}")
-        # print(f"F1-score: {f1:.4f}")
         msg += f"Accuracy: {accuracy:.4f}\n"
         msg += f"Sensitivity (Recall): {sensitivity:.4f}\n"
         msg += f"Specificity: {specificity:.4f}\n"
         msg += f"Precision: {precision:.4f}\n"
         msg += f"AUC: {auc:.4f}\n"
-        # msg += f"F1-score: {f1:.4f}\n"
         return msg
 
 

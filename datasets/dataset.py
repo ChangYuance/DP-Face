@@ -110,10 +110,9 @@ class PalsyDataset(data.Dataset):
         full_video_frames_paths = data['path']
         video_frames_paths = []
         full_num_frames = len(full_video_frames_paths)
-        # 获取文件路径
         from pathlib import Path
         p = Path(data['path'][0])
-        last_three = "/".join(p.parts[-4:-1])  # ← 最推荐！简洁、可读、无副作用
+        last_three = "/".join(p.parts[-4:-1])
         # when getting the frames, randomly choose the neighbour to augment
         for i in range(self.num_frames):
             frame = int(full_num_frames * i / self.num_frames)
@@ -138,16 +137,14 @@ class PalsyDataset(data.Dataset):
             waveform, sample_rate = torchaudio.load(audio_files[0])
             transform = T.MelSpectrogram(
                 sample_rate=16000,
-                n_fft=1024,      # 适中
-                hop_length=107,   # 4s -> 600 帧
+                n_fft=1024,
+                hop_length=107,
                 n_mels=128
             )
             mel_spectrogram = transform(waveform)
             if mel_spectrogram.shape[2] < 600:
-            # 填充
                 mel_spectrogram = torch.nn.functional.pad(mel_spectrogram, (0, 600 - mel_spectrogram.shape[2]))
             elif mel_spectrogram.shape[2] > 600:
-                # 裁剪
                 mel_spectrogram = mel_spectrogram[:, :, :600]
             mel_spectrogram = (mel_spectrogram + 4.26) / (4.57 * 2)
             mel_spectrogram = mel_spectrogram.permute(0, 2, 1)
@@ -157,7 +154,7 @@ class PalsyDataset(data.Dataset):
         images = torch.reshape(
             images, (-1, 3, self.image_size, self.image_size))
         if self.args.audio:
-            return images, mel_spectrogram, last_three, data["label"]# torch.Size([16, 3, 224, 224])
+            return images, mel_spectrogram, last_three, data["label"]
         if self.args.AUs:
             return images, AUs, last_three, data["label"]
         else:

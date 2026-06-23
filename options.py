@@ -35,7 +35,7 @@ class Options(object):
         # numeric settings
         parser.add_argument('--workers', default=4, type=int,
                             metavar='N', help='number of data loading workers')
-        parser.add_argument('--epochs', default=100, type=int,
+        parser.add_argument('--epochs', default=50, type=int,
                             metavar='N', help='number of total epochs to run')
         
         parser.add_argument('-b', '--batch_size',
@@ -51,6 +51,8 @@ class Options(object):
                             type=int, metavar='N', help='crop size')
         parser.add_argument('--model', default='r3d',
                             type=str, help='Backbone')
+        parser.add_argument('--width_mult', default=1.0,
+                            type=float, help='Channel width multiplier for R3D backbone (default: 1.0)')
         # training hyperparameters
         parser.add_argument('--label_smoothing', default=0.1,
                             type=float, help='ratio of label smoothing')
@@ -73,6 +75,8 @@ class Options(object):
         parser.add_argument('--warmup_epochs', default=30, type=int)
         parser.add_argument('--min_lr', default=5e-6, type=float)
         parser.add_argument('--warmup_lr', default=0, type=float)
+        parser.add_argument('--patience', default=10, type=int,
+                            help='Early stopping patience (epochs); 0 to disable')
 
         return parser
 
