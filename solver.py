@@ -10,7 +10,6 @@ from models import *
 from datasets import *
 from utils import *
 from torch.utils.tensorboard import SummaryWriter
-import torch
 from typing import List, Tuple, Optional, Union, Dict, Any
 import torch.nn.functional as F
 from thop import profile
@@ -26,7 +25,6 @@ class Solver(object):
         super(Solver, self).__init__()
         self.args = args
         self.log_path = os.path.join(self.args.output_path, "log.txt")
-        # self.emotions = ["hap", "sad", "neu", "ang", "sur", "dis", "fea"]
         self.emotions = ["Normal", "Palsy"]
         self.best_wa = 0
         self.best_ua = 0
@@ -34,7 +32,6 @@ class Solver(object):
         self.best_test_ua = 0
         if not os.path.exists(self.args.output_path):
             os.makedirs(self.args.output_path)
-        self.writer = SummaryWriter(log_dir=self.args.output_path)
         # init cuda
         if len(self.args.gpu_ids) > 0:
             torch.cuda.set_device(self.args.gpu_ids[0])
@@ -45,6 +42,8 @@ class Solver(object):
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
         np.random.seed(seed)
+        import random
+        random.seed(seed)
         torch.backends.cudnn.deterministic = True
         # init model
         self.model = create_model(self.args)
@@ -92,7 +91,7 @@ class Solver(object):
         for epoch in range(self.args.start_epoch, self.args.epochs):
             inf = '********************' + str(epoch) + '********************'
             start_time = time.time()
-            with open(self.log_path, 'a') as f:
+            with open(self.log_path, 'a', encoding='utf-8') as f:
                 f.write(inf + '\n')
             print(inf)
             # train the model for one epoch
@@ -101,7 +100,6 @@ class Solver(object):
             else:
                 train_acc, train_loss, train_center_loss = self.train(epoch)
             lr = self.optimizer.param_groups[0]['lr']  # 获取当前的学习率
-            self.writer.add_scalar('LR/LearningRate', lr, epoch)
 
             # validate the model
             mode = "val" if self.args.val else "test"
@@ -109,28 +107,22 @@ class Solver(object):
                 val_acc, val_loss, val_center_loss, val_auc, val_wrong_0_to_1_paths, val_wrong_1_to_0_paths = self.validate_AUs(epoch, mode = mode)
             else:
                 val_acc, val_loss, val_center_loss, val_auc, val_wrong_0_to_1_paths, val_wrong_1_to_0_paths = self.validate(epoch, mode = mode)
-            l2_loss = compute_l2_loss(self.model, self.args.weight_decay)/len(self.train_dataloader)/self.args.batch_size
-            # self.writer.add_scalar('Val/Loss', 0.7*val_loss+(1-val_acc[0])*0.3, epoch)
-            # self.writer.add_scalar('Loss_Train/CE', train_loss, epoch)
-            self.writer.add_scalar('Loss_Train/CenterLoss', train_center_loss, epoch)
-            self.writer.add_scalar('Loss_Train/All', train_loss*0.2 + train_center_loss*0.5+0.3*l2_loss, epoch)
-            # self.writer.add_scalar('Loss_Val/CE', val_loss, epoch)
-            self.writer.add_scalar('Loss_Val/CenterLoss', val_center_loss, epoch)
-            self.writer.add_scalar('Loss_Val/All', val_loss*0.2 + val_center_loss*0.5+0.3*l2_loss, epoch)
-            self.writer.add_scalar('acc/Val_acc', val_acc[0], epoch)
             # remember best acc and save checkpoint
-            is_best = (val_acc[0] > self.best_wa) or (
-                val_acc[1] > self.best_ua)
+            # Use UA (balanced accuracy) as sole selection criterion
+            # UA = (Sens+Spec)/2, naturally balances both classes
+            # WA is still tracked for logging/comparison but not used for selection
+            is_best = val_acc[1] > self.best_ua
             self.best_wa = max(val_acc[0], self.best_wa)
-            self.best_ua = max(val_acc[1], self.best_ua)            # if True and self.args.val:
+            self.best_ua = max(val_acc[1], self.best_ua)
+            is_test_best = False
             if is_best and self.args.val:
                 if self.args.AUs or self.args.audio:
                     test_acc, test_loss, _, auc, wrong_0_to_1_paths, wrong_1_to_0_paths  = self.validate_AUs(epoch, mode="test")
                 else:
                     test_acc, test_loss, _, auc, wrong_0_to_1_paths, wrong_1_to_0_paths = self.validate(epoch, mode="test")
+                is_test_best = test_acc[0] > self.best_test_wa
                 self.best_test_wa = max(test_acc[0], self.best_test_wa)
                 self.best_test_ua = max(test_acc[1], self.best_test_ua)
-            self.writer.add_scalar('acc/Best_Test', self.best_test_wa, epoch)
             if self.args.val:
                 self.save({'epoch': epoch,
                             'state_dict': self.model.state_dict(),
@@ -139,7 +131,7 @@ class Solver(object):
                             'best_test_wa': self.best_test_wa,
                             'best_test_ua': self.best_test_ua,
                             'optimizer': self.optimizer.state_dict(),
-                            'args': self.args}, is_best)
+                            'args': self.args}, is_test_best)
             else:
                 self.save({'epoch': epoch,
                             'state_dict': self.model.state_dict(),
@@ -158,7 +150,7 @@ class Solver(object):
                 msg = self.get_acc_msg(epoch, train_acc, train_loss,
                                     val_acc, val_loss,
                                 self.best_wa, self.best_ua, epoch_time)
-            with open(self.log_path, 'a') as f:
+            with open(self.log_path, 'a', encoding='utf-8') as f:
                 f.write(msg)
             print(msg)
             if epoch %5==0:
@@ -168,10 +160,10 @@ class Solver(object):
                         wrong_0_to_1_paths=val_wrong_0_to_1_paths,
                         wrong_1_to_0_paths=val_wrong_1_to_0_paths
                     )
-                with open(self.log_path, 'a') as f:
+                with open(self.log_path, 'a', encoding='utf-8') as f:
                     f.write(cm_msg)
                 print(cm_msg)
-            if is_best:
+            if (self.args.val and is_test_best) or (not self.args.val and is_best):
                 if self.args.val:
                     cm_msg_easy = self.get_confusion_msg_easy(
                         test_acc[2],
@@ -189,7 +181,7 @@ class Solver(object):
                         wrong_1_to_0_paths=wrong_1_to_0_paths
                     )
 
-                with open(self.log_path, 'a') as f:
+                with open(self.log_path, 'a', encoding='utf-8') as f:
                     f.write(cm_msg_easy)
                 print(cm_msg_easy)
                 # convert confusion matrix to heatmap
@@ -209,8 +201,7 @@ class Solver(object):
                 # save the heatmap
                 figure.savefig(fig_path)
                 plt.close()
-        self.writer.close()
-        return self.best_ua, self.best_ua
+        return self.best_wa, self.best_ua
 
     def train(self, epoch):
         """ Train the model for one eopch
@@ -239,7 +230,7 @@ class Solver(object):
                 all_center_loss += center_loss.item()
             self.optimizer.zero_grad()
             if self.args.center_loss:
-                (0.3*loss + 0.7*center_loss).backward()
+                (0.4*loss + 0.6*center_loss).backward()
             else:
                 loss.backward()
             self.optimizer.step()
@@ -451,33 +442,6 @@ class Solver(object):
         msg += f"Accuracy: {accuracy:.4f}\n"
         msg += f"Sensitivity (Recall): {sensitivity:.4f}\n"
         msg += f"Specificity: {specificity:.4f}\n"
-        # ✅ 新增：添加错误样本路径（关键修改！）
-        msg += "\n" + "="*60 + "\n"
-        msg += "❌ MISCLASSIFIED SAMPLES (for debugging):\n"
-        msg += "="*60 + "\n"
-        # 0→1: Normal → Palsy (False Positive)
-        msg += f"\n🔹 [False Positives] Normal samples misclassified as Palsy ({len(wrong_0_to_1_paths)}):\n"
-        if wrong_0_to_1_paths:
-            # 取前 10 条 + 提示总数（防日志过长）
-            for i, p in enumerate(wrong_0_to_1_paths[:10], 1):
-                # 简洁显示：保留最后两级目录/文件名（可选美化）
-                short_p = "/".join(p.split("/")[-2:]) if len(p.split("/")) > 2 else p
-                msg += f"  {i:2d}. {short_p}\n"
-            if len(wrong_0_to_1_paths) > 10:
-                msg += f"  ... and {len(wrong_0_to_1_paths) - 10} more.\n"
-        else:
-            msg += "  (None)\n"
-        # 1→0: Palsy → Normal (False Negative)
-        msg += f"\n🔹 [False Negatives] Palsy samples misclassified as Normal ({len(wrong_1_to_0_paths)}):\n"
-        if wrong_1_to_0_paths:
-            for i, p in enumerate(wrong_1_to_0_paths[:5], 1):
-                short_p = "/".join(p.split("/")[-2:]) if len(p.split("/")) > 2 else p
-                msg += f"  {i:2d}. {short_p}\n"
-            if len(wrong_1_to_0_paths) > 5:
-                msg += f"  ... and {len(wrong_1_to_0_paths) - 5} more.\n"
-        else:
-            msg += "  (None)\n"
-        msg += "\n" + "="*60 + "\n\n"
         return msg
     def get_confusion_msg_easy(self, confusion_matrix, val=True, auc=0,
                             wrong_0_to_1_paths=None, wrong_1_to_0_paths=None):
