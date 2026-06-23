@@ -1,4 +1,4 @@
-from .dataset_DFEW import DFEWDataset
+from .dataset import PalsyDataset
 import torch
 
 
@@ -12,7 +12,7 @@ def create_dataloader(args, mode):
     Returns:
         dataloader
     """
-    dataset = DFEWDataset(args, mode)
+    dataset = PalsyDataset(args, mode)
 
     dataloader = None
 

@@ -2,7 +2,6 @@
 outputs/
 scripts/
 DP-dataset.zip
-DataSplit/
 batch_scripts/
 DataSplit.zip
 readme.txt
