@@ -6,5 +6,6 @@ seaborn
 matplotlib
 numpy
 torchvision
-pillow
+Pillow
 tensorboard
+torchaudio
