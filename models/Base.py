@@ -3,10 +3,10 @@ from torch import nn
 from torchvision.models.video import r3d_18, R3D_18_Weights
 from einops import rearrange
 
-from utils import *
+from utils import DMIN, CenterLoss
 
 
-class M3DFEL(nn.Module):
+class Base(nn.Module):
     """The proposed M3DFEL framework
 
     Args:
@@ -14,7 +14,7 @@ class M3DFEL(nn.Module):
     """
 
     def __init__(self, args):
-        super(M3DFEL, self).__init__()
+        super(Base, self).__init__()
         self.args = args
         self.device = torch.device(
             'cuda:%d' % args.gpu_ids[0] if args.gpu_ids else 'cpu')
@@ -25,20 +25,27 @@ class M3DFEL(nn.Module):
         #model = r3d_18(weights=None)
         self.features = nn.Sequential(
             *list(model.children())[:-1])  # after avgpool 512x1
-        self.lstm = nn.LSTM(input_size=512, hidden_size=512,
-                            num_layers=2, batch_first=True, bidirectional=True)
+        # Freeze encoder except layer3.0
+        for param in self.features.parameters():
+            param.requires_grad = False
+        for param in self.features[3].parameters():
+            param.requires_grad = True
+        self.lstm = nn.LSTM(input_size=512, hidden_size=256,
+                            num_layers=1, batch_first=True, bidirectional=False)
         # multi head self attention
+        self.lstm_dim = 256
         self.heads = 8
-        self.dim_head = 1024 // self.heads
+        self.dim_head = self.lstm_dim // self.heads
         self.scale = self.dim_head ** -0.5
         self.attend = nn.Softmax(dim=-1)
         self.to_qkv = nn.Linear(
-            1024, (self.dim_head * self.heads) * 3, bias=False)
-        self.norm = DMIN(num_features=1024)
+            self.lstm_dim, (self.dim_head * self.heads) * 3, bias=False)
+        self.norm = DMIN(num_features=self.lstm_dim)
         self.pwconv = nn.Conv1d(self.bag_size, 1, 3, 1, 1)
         # classifier
-        self.fc = nn.Linear(1024, self.args.num_classes)
+        self.fc = nn.Linear(self.lstm_dim, self.args.num_classes)
         self.Softmax = nn.Softmax(dim=-1)
+        self.center_loss = CenterLoss(num_classes=2, feat_dim=self.lstm_dim, device=self.device, lambda_center=0.5)
 
     def MIL(self, x):
         """The Multi Instance Learning Agregation of instances
@@ -64,7 +71,6 @@ class M3DFEL(nn.Module):
         return x
 
     def forward(self, x):
-
         # [batch, 16, 3, 112, 112]
         x = rearrange(x, 'b (t1 t2) c h w -> (b t1) c t2 h w',
                     t1=self.bag_size, t2=self.instance_length)
@@ -78,5 +84,4 @@ class M3DFEL(nn.Module):
         x = self.pwconv(x).squeeze()
         # [batch, 1024]
         out = self.fc(x)
-        # [batch, 7]
-        return out
+        return out, x

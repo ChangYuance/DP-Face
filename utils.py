@@ -1,5 +1,6 @@
 import torch.nn as nn
 import torch
+import torch.nn.functional as F
 from timm.scheduler.cosine_lr import CosineLRScheduler
 from einops import rearrange
 import numpy as np
@@ -65,7 +66,7 @@ class EMA():
                 param.data = self.backup[name]
         self.backup = {}
 class FocalLoss(nn.Module):
-    def __init__(self, alpha=0.25, gamma=2, num_classes=7):
+    def __init__(self, alpha=0.25, gamma=2, num_classes=2):
         super(FocalLoss, self).__init__()
         self.alpha = alpha
         self.gamma = gamma
@@ -155,7 +156,7 @@ def get_wrong_path_with_confidence(
         print(f"\n🔍 Top {len(paths_0_to_1)} suspicious 0→1 errors (model confident in '{class_names[1]}'):")
         for i, p in enumerate(paths_0_to_1[:3]):
             idx = np.where((all_target == 0) & (all_pred == 1) & (allpath == p))[0][0]
-            conf_val = conf_0_to_1[idx].item()
+            conf_val = conf_0_to_1_full[idx].item()
             print(f"  [{i+1}] {p} | conf={conf_val:.4f}")
     # ✅ Apply your original get_unique_two_levels logic
     def get_unique_two_levels(paths: list) -> list:
